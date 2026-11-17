@@ -5,11 +5,25 @@ const core=require('./core');
 const ROOT=__dirname, DATA=process.env.VAL_HELPER_DATA||path.join(ROOT,'data'), UPLOADS=path.join(DATA,'screenshots'), SESSION=path.join(DATA,'session.json');
 fs.mkdirSync(UPLOADS,{recursive:true});
 const STATE=path.join(DATA,'settings.json');
-let state=core.defaultState();
-if(fs.existsSync(STATE)) {try{state={...state,...JSON.parse(fs.readFileSync(STATE,'utf8'))};}catch{fs.copyFileSync(STATE,path.join(DATA,`settings-recovery-${Date.now()}.json`));}}
+let state=core.defaultState(),migrationPending=false;
+if(fs.existsSync(STATE)) {
+ let loaded;
+ try{loaded=JSON.parse(fs.readFileSync(STATE,'utf8'));if(!loaded||typeof loaded!=='object'||Array.isArray(loaded))throw new Error('配置格式不正确');}
+ catch{loaded=null;fs.copyFileSync(STATE,path.join(DATA,`settings-recovery-${Date.now()}.json`));}
+ if(loaded){
+  const migrated=core.pricing.migrateState(loaded);migrationPending=loaded.priceCatalogVersion!==core.pricing.revision;
+  if(migrationPending){
+   const backupFile=`settings-before-pricing-${core.pricing.revision}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.json`;
+   fs.copyFileSync(STATE,path.join(DATA,backupFile),fs.constants.COPYFILE_EXCL);
+   migrated.priceMigration={...migrated.priceMigration,backupFile};
+  }
+  state={...state,...migrated};
+ }
+}
 const BOSS_DISCOUNTS=[1,0.98,0.97,0.96,0.95];
 state.bossDiscounts=Object.fromEntries(Object.entries(state.bossDiscounts&&typeof state.bossDiscounts==='object'&&!Array.isArray(state.bossDiscounts)?state.bossDiscounts:{}).filter(([name,value])=>name.trim()===name&&name.length>0&&name.length<=100&&BOSS_DISCOUNTS.includes(value)));
 function save(){const tmp=STATE+'.tmp';fs.writeFileSync(tmp,JSON.stringify(state,null,2));fs.renameSync(tmp,STATE);}
+if(migrationPending)save();
 const requestedToken=process.env.VAL_HELPER_TOKEN;
 const token=/^[a-f0-9]{48}$/.test(requestedToken||'')?requestedToken:crypto.randomBytes(24).toString('hex');
 let lastSeen=Date.now(),ocrBusy=false;
@@ -24,7 +38,7 @@ function savedScreenshots(value){
  const pick=(object,keys)=>Object.fromEntries(keys.filter(k=>object?.[k]!==undefined).map(k=>[k,object[k]]));
  const player=p=>({...pick(p,['id','name','rank','rankName','confidence']),icon:p?.icon?{rank:p.icon.rank}:undefined});
  return value.slice(0,100).map(s=>({image:imageName(s.image)?s.image:null,name:String(s.name||'战绩截图').slice(0,200),kind:s.kind==='detail'?'detail':'history',hash:typeof s.hash==='string'?s.hash.slice(0,64):undefined,
-  players:Array.isArray(s.players)?s.players.slice(0,10).map(player):[],matches:Array.isArray(s.matches)?s.matches.slice(0,200).map(m=>({...pick(m,['id','score','result','mvp','rank','rankName','party','selected','settled','billingQuantity','ending','actualRounds','playerId']),billing:m.billing?pick(m.billing,['rank','party','price','discount','unit']):undefined,icon:m?.icon?{rank:m.icon.rank}:undefined})):[]}));
+  players:Array.isArray(s.players)?s.players.slice(0,10).map(player):[],matches:Array.isArray(s.matches)?s.matches.slice(0,200).map(m=>({...pick(m,['id','score','result','mvp','rank','rankName','party','selected','settled','settledManual','billingQuantity','ending','actualRounds','playerId','pricingRevision','redScreenParty','redScreenStage']),billing:m.billing?pick(m.billing,['rank','party','price','discount','unit','pricingRevision']):undefined,icon:m?.icon?{rank:m.icon.rank}:undefined})):[]}));
 }
 const server=http.createServer(async(req,res)=>{
  try{
@@ -114,7 +128,7 @@ const server=http.createServer(async(req,res)=>{
    const file=path.join(UPLOADS,name);if(!fs.existsSync(file))return json(res,404,{error:'图片不存在'});
    res.writeHead(200,{'Content-Type':name.endsWith('.png')?'image/png':'image/jpeg'});return fs.createReadStream(file).pipe(res);
   }
-  const names={'/':'index.html','/app.js':'app.js','/billing-rules.js':'billing-rules.js','/styles.css':'styles.css','/icon.svg':'icon.svg','/mvp-gaming-logo.png':'mvp-gaming-logo.png'};
+  const names={'/':'index.html','/app.js':'app.js','/pricing-rules.js':'pricing-rules.js','/billing-rules.js':'billing-rules.js','/styles.css':'styles.css','/icon.svg':'icon.svg','/mvp-gaming-logo.png':'mvp-gaming-logo.png'};
   if(req.method==='GET'&&names[p]){
    const name=names[p],mime=name.endsWith('html')?'text/html':name.endsWith('css')?'text/css':name.endsWith('svg')?'image/svg+xml':name.endsWith('png')?'image/png':'text/javascript';
    res.writeHead(200,{'Content-Type':`${mime}; charset=utf-8`,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"});return fs.createReadStream(path.join(ROOT,name)).pipe(res);

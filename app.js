@@ -1,9 +1,18 @@
 'use strict';
 const $=id=>document.getElementById(id);
-const RANKS=['匹配及下三','黄金','铂金','钻石','超凡','神话1','神话2','神话3','赋能'];
-const PARTIES=['正常','1陪2','1陪4','2陪3','4陪1'];
-const DISCOUNTS=[['1','无折扣'],['0.98','98折'],['0.97','97折'],['0.96','96折'],['0.95','95折'],['0.9','原价 × 9折（4陪1）'],['0.882','98折 × 9折（4陪1）'],['0.873','97折 × 9折（4陪1）'],['0.864','96折 × 9折（4陪1）'],['0.855','95折 × 9折（4陪1）']];
-const TIERS={男陪:['娱乐','大神','王牌','镇店','金牌镇店','前职业'],女陪:['娱乐','精锐','大神','镇店']};
+const RANKS=PricingRules.ranks;
+const PARTIES=['正常','1陪2','1陪4','2陪3','4陪1','5陪0'];
+const DISCOUNTS=[['1','无折扣'],['0.98','98折'],['0.97','97折'],['0.96','96折'],['0.95','95折'],['0.9','原价 × 9折（4陪1）'],['0.882','98折 × 9折（4陪1）'],['0.873','97折 × 9折（4陪1）'],['0.864','96折 × 9折（4陪1）'],['0.855','95折 × 9折（4陪1）'],['0.88','原价 × 88折（5陪0）'],['0.8624','98折 × 88折（5陪0）'],['0.8536','97折 × 88折（5陪0）'],['0.8448','96折 × 88折（5陪0）'],['0.836','95折 × 88折（5陪0）']];
+const TIERS={男陪:PricingRules.tiers,女陪:PricingRules.femaleTiers};
+let currentPricingRevision=PricingRules.revision;
+function usesLegacyPricing(){return currentPricingRevision===PricingRules.legacyRevision;}
+function activeRanks(){return usesLegacyPricing()?PricingRules.legacyRanks:RANKS;}
+function activeTiers(category){return usesLegacyPricing()?(category==='女陪'?PricingRules.legacyFemaleTiers:PricingRules.legacyTiers):TIERS[category];}
+function activeParties(){return usesLegacyPricing()?PARTIES.filter(party=>party!=='5陪0'):PARTIES;}
+function activePrices(){return usesLegacyPricing()?(state.priceMigration?.previousPrices||PricingRules.defaultPrices(PricingRules.legacyRevision)):state.prices;}
+function syncPricingControls(){for(const id of ['rank','bulkRank']){const value=$(id).value;options($(id),['',...activeRanks()],value);$(id).options[0].textContent=id==='rank'?'请选择段位':'未识别，请选择';}for(const id of ['party','bulkParty']){const value=$(id).value;options($(id),[...(id==='bulkParty'?['']:[]),...activeParties()],value);if(id==='bulkParty')$(id).options[0].textContent='分别设置';}const notice=$('pricingNotice');notice.hidden=!usesLegacyPricing()&&!state.priceMigration;notice.textContent=usesLegacyPricing()?'这条历史报单保留原版价格和计费规则；开始新报单后使用新价目表。':'已使用新版价目表；原有自定义价格已保留，历史报单仍按原价恢复。';}
+function detectedRank(match){if(usesLegacyPricing())return match.rank||match.icon?.rank||'';if(RANKS.includes(match.rank))return match.rank;const name=String(match.rankName||match.icon?.name||match.icon?.rankName||'').normalize('NFKC');if(match.rank==='超凡'||match.icon?.rank==='超凡'){const level=name.match(/(?:超凡|ASCENDANT)\s*([123])/i)?.[1]||({21:'1',22:'2',23:'3'}[match.icon?.tier]);return level==='3'?'超凡3':level?'超凡1-2':'';}return RANKS.includes(match.icon?.rank)?match.icon.rank:'';}
+function applySettlementDefaults(match){if(usesLegacyPricing()||!isTechnical()||match.settledManual===true)return;const charge=MatchBilling.calculate({...match,pricingRevision:currentPricingRevision,tier:$('tier').value});match.settled=charge.free?false:['4陪1','5陪0'].includes(match.party)&&['胜利','失败','平局'].includes(match.result)?match.result==='胜利':true;}
 const token=new URLSearchParams(location.search).get('token')||sessionStorage.getItem('appToken');
 if(token)sessionStorage.setItem('appToken',token);
 history.replaceState(null,'',location.pathname);
@@ -27,17 +36,17 @@ function bindCount(select,custom,callback){select.addEventListener('change',()=>
 function primaryQuantity(){return readCount($('quantity'),$('customQuantity'));}
 function isTechnical(){return $('tier').value!=='娱乐';}
 function primarySettled(){return isTechnical()?readCount($('settledQuantity'),$('customSettledQuantity')):primaryQuantity();}
-function refreshSettlementUI(){$('settledField').hidden=!isTechnical();matchList();renderExtraLines();syncOvertime();}
+function refreshSettlementUI(){configureDiscount($('party').value,$('discount'));for(const line of extraLines)line.discount=partyDiscount(line.party,line.discount);$('settledField').hidden=!isTechnical();matchList();renderExtraLines();syncOvertime();}
 function primaryOvertime(){return readCount($('overtimeQuantity'),$('customOvertimeQuantity'));}
 function syncOvertime(){if(!primarySettledManual)writeCount($('settledQuantity'),$('customSettledQuantity'),primaryQuantity());if(!primaryOvertimeManual)writeCount($('overtimeQuantity'),$('customOvertimeQuantity'),Number($('extra').value)?primarySettled():0);for(const line of extraLines){if(!line.manualSettled)line.settledQuantity=line.quantity;if(!line.manualOvertime)line.overtimeQuantity=Number($('extra').value)?(isTechnical()?line.settledQuantity:line.quantity):0;}renderExtraLines();queuePreview();}
-function tariff(rank){return state.prices[[$('category').value,$('tier').value,rank].join('|')]??'';}
+function tariff(rank){return activePrices()[[$('category').value,$('tier').value,rank].join('|')]??'';}
 function addBillingLine(rank=$('rank').value||'',quantity=1,overtimeQuantity){
  const line={id:crypto.randomUUID(),rank,price:tariff(rank),party:$('party').value,discount:$('discount').value,unit:$('unit').value,quantity,settledQuantity:quantity,manualSettled:false,overtimeQuantity:overtimeQuantity??(Number($('extra').value)?quantity:0),manualOvertime:overtimeQuantity!==undefined};extraLines.push(line);return line;
 }
 function configureDiscount(party,select){
- const add={'1':'0.9','0.98':'0.882','0.97':'0.873','0.96':'0.864','0.95':'0.855'},remove={'0.9':'1','0.882':'0.98','0.873':'0.97','0.864':'0.96','0.855':'0.95'},locked=party==='4陪1';
- for(const option of select.options)option.disabled=locked?Object.hasOwn(add,option.value):Object.hasOwn(remove,option.value);
- if(locked&&add[select.value])select.value=add[select.value];else if(!locked&&remove[select.value])select.value=remove[select.value];
+ const value=partyDiscount(party,select.value),base=[1,.98,.97,.96,.95],allowed=base.map(n=>partyDiscount(party,n));
+ for(const option of select.options)option.disabled=!allowed.includes(option.value);
+ select.value=value;
 }
 function renderExtraLines(){
  const container=$('extraLines');container.replaceChildren();
@@ -48,11 +57,11 @@ function renderExtraLines(){
   const remove=document.createElement('button');remove.type='button';remove.className='quiet small';remove.textContent='移除';remove.onclick=()=>{extraLines=extraLines.filter(l=>l.id!==line.id);billingManual=true;renderExtraLines();queuePreview();};heading.append(title,remove);row.append(heading);
   const grid=document.createElement('div');grid.className='grid';
   function selectControl(text,key,values){const label=document.createElement('label');label.textContent=text;const select=document.createElement('select');select.className='line-'+key;select.setAttribute('aria-label','第 '+(index+2)+' 段'+text);options(select,values,line[key]);label.append(select);select.onchange=()=>{const before={...line},context=prepareMatchBilling(undefined,true);line[key]=select.value;if(context)updateLineMatches(before,line);billingManual=true;queuePreview();};return {label,select};}
-  const rank=selectControl('段位','rank',['',...RANKS]);rank.select.options[0].textContent='请选择段位';rank.select.onchange=()=>{line.rank=rank.select.value;line.price=tariff(line.rank);billingManual=true;renderExtraLines();queuePreview();};
+  const rank=selectControl('段位','rank',['',...activeRanks()]);rank.select.options[0].textContent='请选择段位';rank.select.onchange=()=>{line.rank=rank.select.value;line.price=tariff(line.rank);billingManual=true;renderExtraLines();queuePreview();};
   const priceLabel=document.createElement('label');priceLabel.textContent='基础单价（AUD）';const rate=document.createElement('input');rate.type='number';rate.min='0';rate.step='.01';rate.className='line-price';rate.value=line.price;priceLabel.append(rate);rate.oninput=()=>{const before={...line},context=prepareMatchBilling(undefined,true);line.price=rate.value;if(context)updateLineMatches(before,line);billingManual=true;queuePreview();};
-  const party=selectControl('陪玩人数','party',PARTIES),unit=selectControl('结算方式','unit',['把','小时']);unit.select.options[0].textContent='按把';unit.select.options[1].textContent='按小时';
+  const party=selectControl('陪玩人数','party',activeParties()),unit=selectControl('结算方式','unit',['把','小时']);unit.select.options[0].textContent='按把';unit.select.options[1].textContent='按小时';
   const discount=selectControl('折扣','discount',DISCOUNTS.map(d=>d[0]));for(const [i,d] of DISCOUNTS.entries())discount.select.options[i].textContent=d[1];configureDiscount(line.party,discount.select);line.discount=discount.select.value;
-  party.select.onchange=()=>{const before={...line},context=!legacyPartyAmbiguous?prepareMatchBilling(undefined,true):null;line.party=party.select.value;configureDiscount(line.party,discount.select);line.discount=discount.select.value;if(context)updateLineMatches(before,line);billingManual=true;bulkPartyManual=false;updateBulkRankButton();queuePreview();};
+  party.select.onchange=()=>{const before={...line},context=!legacyPartyAmbiguous?prepareMatchBilling(undefined,true):null;line.party=party.select.value;configureDiscount(line.party,discount.select);line.discount=discount.select.value;if(context)updateLineMatches(before,line);alignMatchSettlements();renderExtraLines();matchList();billingManual=true;bulkPartyManual=false;updateBulkRankButton();queuePreview();};
   function countControl(text,key,allowZero){
    const label=document.createElement('label');label.textContent=text;const select=document.createElement('select'),custom=document.createElement('input');const name={quantity:'quantity',settledQuantity:'settled',overtimeQuantity:'overtime'}[key];select.className='line-'+name;custom.className='line-custom-'+name;custom.type='number';custom.min=allowZero?'0':'.5';custom.step='.5';custom.placeholder='输入自定义数字';quantityChoices(select,allowZero);writeCount(select,custom,line[key]);
    bindCount(select,custom,()=>{line[key]=readCount(select,custom);billingManual=true;if(key==='settledQuantity')line.manualSettled=true;if(key==='overtimeQuantity')line.manualOvertime=true;
@@ -65,7 +74,13 @@ function renderExtraLines(){
 }
 
 function matchCharge(match){
- const result=MatchBilling.calculate(match);
+ const result=MatchBilling.calculate({...match,pricingRevision:currentPricingRevision,tier:$('tier').value});
+ if(!usesLegacyPricing()){
+  if(result.free||result.quantity===0)return {...result,quantity:1,reason:'免单，计入发生局数但不结单'};
+  if(match.settled===false&&result.quantity===null)return {...result,quantity:1,reason:'已确认不结单',needsConfirmation:false};
+  if(isTechnical()&&['4陪1','5陪0'].includes(match.party)&&!['胜利','失败','平局'].includes(match.result)&&!match.settledManual)return {quantity:null,reason:'请确认本局是否获胜，或手动选择是否结单',needsConfirmation:true};
+  if(match.ending==='remake'&&result.quantity===null)return result;
+ }
  if(result.quantity!==null||match.billingQuantity!==undefined&&match.billingQuantity!==null)return result;
  return {...result,quantity:1,reason:'暂按1把；投降、红屏或信息不足时可直接手动改把数',needsConfirmation:true};
 }
@@ -77,8 +92,7 @@ function updateBulkRankButton(){
  $('bulkParty').disabled=!selected.length;$('bulkParty').value=bulkPartyManual&&parties.length===1&&selected.every(match=>match.party===parties[0])?parties[0]:'';
 }
 function partyDiscount(party,value){
- const base={'0.9':'1','0.882':'0.98','0.873':'0.97','0.864':'0.96','0.855':'0.95'}[String(value)]||String(value??1);
- return party==='4陪1'?String(Math.round(Number(base)*.9*1000000)/1000000):base;
+ return String(PricingRules.partyDiscount(party,value,currentPricingRevision,$('tier').value));
 }
 function billingLines(primaryParty=$('party').value){const primary={rank:$('rank').value,party:$('party').value,price:$('price').value,discount:$('discount').value,unit:$('unit').value,quantity:primaryQuantity()};return [{...primary,...(primaryParty&&typeof primaryParty==='object'?primaryParty:{party:primaryParty})},...extraLines];}
 function prepareMatchBilling(primaryParty,quiet=false){
@@ -101,30 +115,43 @@ function prepareMatchBilling(primaryParty,quiet=false){
  return {prepared:true,manualLines};
 }
 function updateLineMatches(before,after){
- for(const image of screenshots)for(const match of image.matches){const billing=match.billing;if(!match.selected||!billing)continue;if(billing.rank===before.rank&&billing.party===before.party&&Number(billing.price)===Number(before.price)&&Number(billing.discount)===Number(before.discount)&&billing.unit===(before.unit==='小时'?'小时':'把')){match.party=after.party;match.billing={rank:after.rank,party:after.party,price:after.price,discount:String(after.discount),unit:after.unit==='小时'?'小时':'把'};}}
+ for(const image of screenshots)for(const match of image.matches){const billing=match.billing;if(!match.selected||!billing)continue;if(billing.rank===before.rank&&billing.party===before.party&&Number(billing.price)===Number(before.price)&&Number(billing.discount)===Number(before.discount)&&billing.unit===(before.unit==='小时'?'小时':'把')){match.party=after.party;match.billing={rank:after.rank,party:after.party,price:after.price,discount:String(after.discount),unit:after.unit==='小时'?'小时':'把'};if(before.party!==after.party)applySettlementDefaults(match);}}
  updateBulkRankButton();
+}
+function alignMatchSettlements(){
+ if(usesLegacyPricing()||!isTechnical())return;
+ const selected=screenshots.flatMap(image=>image.matches).filter(match=>match.selected);
+ const key=line=>JSON.stringify([line.rank,line.party,Number(line.price),Number(line.discount),line.unit==='小时'?'小时':'把']),groups=new Map();
+ billingLines().forEach((line,index)=>{if(line.unit==='小时')return;const value=key(line),group=groups.get(value)||[];group.push({line,index,left:Number(line.quantity),settled:0});groups.set(value,group);});
+ for(const [value,group] of groups){
+  const matches=selected.filter(match=>match.billing&&key(match.billing)===value);if(!matches.length||matches.some(match=>matchCharge(match).quantity===null))continue;
+  const quantity=matches.reduce((sum,match)=>sum+matchCharge(match).quantity,0);if(quantity!==group.reduce((sum,item)=>sum+item.left,0))continue;
+  let slot=0;for(const match of matches){let remaining=matchCharge(match).quantity;while(remaining>0&&slot<group.length){const item=group[slot],part=Math.min(remaining,item.left);if(match.settled!==false)item.settled+=part;item.left-=part;remaining-=part;if(!item.left)slot++;}}
+  for(const {index,settled} of group){if(index===0){writeCount($('settledQuantity'),$('customSettledQuantity'),settled);primarySettledManual=true;if(Number(primaryOvertime())>settled)writeCount($('overtimeQuantity'),$('customOvertimeQuantity'),settled);}else{const extra=extraLines[index-1];extra.settledQuantity=settled;extra.manualSettled=true;if(Number(extra.overtimeQuantity)>settled)extra.overtimeQuantity=settled;}}
+ }
 }
 function applyBulkParty(){
  const party=$('bulkParty').value;if(!party){bulkPartyManual=false;updateBulkRankButton();return;}
  const selected=screenshots.flatMap(image=>image.matches).filter(match=>match.selected);if(!selected.length)return;
  if(billingManual||$('unit').value==='小时'){
-  for(const match of selected){match.party=party;if(match.billing)match.billing={...match.billing,party,discount:partyDiscount(party,match.billing.discount)};}
+  for(const match of selected){match.party=party;applySettlementDefaults(match);if(match.billing)match.billing={...match.billing,party,discount:partyDiscount(party,match.billing.discount)};}
   $('party').value=party;lastParty=party;$('discount').value=partyDiscount(party,$('discount').value);configureDiscount(party,$('discount'));
   for(const line of extraLines){line.party=party;line.discount=partyDiscount(party,line.discount);}
-  renderExtraLines();queuePreview();
+  alignMatchSettlements();renderExtraLines();queuePreview();
  }else{
   const context=prepareMatchBilling();if(!context){$('bulkParty').value='';return;}
-  for(const match of selected)match.party=party;buildFromMatches(context);
+  for(const match of selected){match.party=party;applySettlementDefaults(match);}buildFromMatches(context);
  }
- bulkPartyManual=true;updateBulkRankButton();toast('已将 '+selected.length+' 局的陪玩人数设为'+party);
+ bulkPartyManual=true;matchList();updateBulkRankButton();toast('已将 '+selected.length+' 局的陪玩人数设为'+party);
 }
 function buildFromMatches(prepared){
  if(billingLines().some(line=>line.unit==='小时')){toast('按小时请填写实际时长，不按截图回合换算。');return;}
  const context=prepared?.prepared?prepared:prepareMatchBilling();if(!context)return;
  const selected=screenshots.flatMap(image=>image.matches).filter(m=>m.selected),groups=new Map();
+ for(const match of selected)applySettlementDefaults(match);
  const invalid=selected.find(match=>matchCharge(match).quantity===null);
  $('matchBillingError').hidden=!invalid;
- if(invalid){$('matchBillingError').textContent='请填写有效的计费把数，按0.5递增。';setQuantity(0);queuePreview();return;}
+ if(invalid){$('matchBillingError').textContent=matchCharge(invalid).reason+'；请在该局确认，或手动修改把数／是否结单。';queuePreview();return;}
  for(const match of selected){const rank=match.rank||'',party=PARTIES.includes(match.party)?match.party:'正常',old=match.billing||{},rate={rank,party,price:old.rank===rank?old.price:tariff(rank),discount:partyDiscount(party,old.discount??$('discount').value),unit:'把'},key=JSON.stringify([rank,party,String(rate.price),rate.discount]),quantity=matchCharge(match).quantity,group=groups.get(key)||{...rate,quantity:0,settledQuantity:0};match.billing={...rate};group.quantity+=quantity;if(match.settled!==false)group.settledQuantity+=quantity;groups.set(key,group);}
  const entries=[...groups.values()];extraLines=[];primaryOvertimeManual=false;primarySettledManual=false;billingManual=false;
  if(entries.length){const first=entries[0];$('rank').value=first.rank;price();$('price').value=first.price;$('party').value=first.party;lastParty=first.party;$('discount').value=first.discount;configureDiscount(first.party,$('discount'));setQuantity(first.quantity);writeCount($('settledQuantity'),$('customSettledQuantity'),first.settledQuantity);primarySettledManual=true;for(const group of entries.slice(1)){extraLines.push({...group,id:crypto.randomUUID(),fromMatches:true,manualSettled:true,manualOvertime:false,overtimeQuantity:Number($('extra').value)?group.settledQuantity:0});}}else setQuantity(0);
@@ -134,20 +161,20 @@ function buildFromMatches(prepared){
 }
 function matchBillingControls(match){
  const field=document.createElement('label');field.className='match-count-label';field.append(document.createTextNode('把数'));
- const select=document.createElement('select');select.className='match-quantity';select.setAttribute('aria-label','计费把数');quantityChoices(select);
+ const select=document.createElement('select');select.className='match-quantity';select.setAttribute('aria-label','计费把数');quantityChoices(select,!usesLegacyPricing());
  const restore=document.createElement('option');restore.value='auto';restore.textContent='恢复自动';select.append(restore);
  const custom=document.createElement('input');custom.className='match-custom-quantity';custom.type='number';custom.min='.5';custom.step='.5';custom.placeholder='自定义';custom.setAttribute('aria-label','自定义计费把数');
  function refresh(){
   const charge=matchCharge(match),manual=match.billingQuantity!==undefined&&match.billingQuantity!==null;
-  writeCount(select,custom,manual?match.billingQuantity:charge.quantity);
+  writeCount(select,custom,manual?match.billingQuantity:charge.quantity??'');
   select.dataset.source=manual?'manual':'auto';select.title=(manual?'手动：':'自动：')+charge.reason+'。特殊结算可直接改把数。';
  }
  select.onchange=()=>{
   const context=prepareMatchBilling();if(!context){refresh();return;}
   if(select.value==='auto')match.billingQuantity=null;
   else if(select.value==='custom')match.billingQuantity='';
-  else match.billingQuantity=select.value;
-  refresh();buildFromMatches(context);if(select.value==='custom')custom.focus();
+  else {match.billingQuantity=select.value;if(select.value==='0'){match.settled=false;match.settledManual=true;match.billingQuantity=1;}}
+  const wasCustom=select.value==='custom',wasFree=select.value==='0';refresh();buildFromMatches(context);if(wasFree)matchList();if(wasCustom)custom.focus();
  };
  custom.onchange=()=>{if(select.value!=='custom')return;const context=prepareMatchBilling();if(!context){refresh();return;}match.billingQuantity=custom.value;refresh();buildFromMatches(context);};
  field.append(select,custom);refresh();return field;
@@ -167,7 +194,7 @@ function syncBossDiscount(force=false){
  const beforeLines=billingLines().map(line=>({...line}));
  appliedBossName=name;const base=bossDiscountFor(name);$('bossDiscount').value=String(base);
  $('discount').value=String(base);configureDiscount($('party').value,$('discount'));
- for(const line of extraLines)line.discount=String(line.party==='4陪1'?Math.round(base*.9*1000000)/1000000:base);
+ for(const line of extraLines)line.discount=partyDiscount(line.party,base);
  const afterLines=billingLines();beforeLines.forEach((line,i)=>updateLineMatches(line,afterLines[i]));
  renderExtraLines();updateBossDiscountNote();queuePreview();
 }
@@ -186,16 +213,22 @@ function bosses(){
   chip.append(b);manager.append(chip);
  }
 }
-function form(){return {playerId:$('playerId').value,date:$('date').value,time:$('time').value,boss:$('boss').value,game:$('game').value,rank:$('rank').value,category:$('category').value,tier:$('tier').value,party:$('party').value,price:$('price').value,unit:$('unit').value,quantity:primaryQuantity(),discount:$('discount').value,extra:$('extra').value,matchBilling:screenshots.flatMap(image=>image.matches.filter(m=>m.selected).map(m=>({score:m.score,result:m.result,ending:m.ending||'normal',actualRounds:m.actualRounds??null,quantity:matchCharge(m).quantity,settled:m.settled!==false,rank:m.rank,party:m.party,billing:m.billing}))),lines:[{rank:$('rank').value,price:$('price').value,party:$('party').value,unit:$('unit').value,discount:$('discount').value,quantity:primaryQuantity(),settledQuantity:primarySettled(),overtimeQuantity:primaryOvertime()},...extraLines.map(l=>({rank:l.rank,price:l.price,party:l.party,unit:l.unit,discount:l.discount,quantity:l.quantity,settledQuantity:l.settledQuantity,overtimeQuantity:l.overtimeQuantity}))]};}
+function form(){return {pricingRevision:currentPricingRevision,playerId:$('playerId').value,date:$('date').value,time:$('time').value,boss:$('boss').value,game:$('game').value,rank:$('rank').value,category:$('category').value,tier:$('tier').value,party:$('party').value,price:$('price').value,unit:$('unit').value,quantity:primaryQuantity(),discount:$('discount').value,extra:$('extra').value,matchBilling:screenshots.flatMap(image=>image.matches.filter(m=>m.selected).map(m=>({score:m.score,result:m.result,ending:m.ending||'normal',actualRounds:m.actualRounds??null,redScreenParty:m.redScreenParty,redScreenStage:m.redScreenStage,settledManual:m.settledManual,quantity:matchCharge(m).quantity,settled:m.settled!==false,rank:m.rank,party:m.party,billing:m.billing}))),lines:[{rank:$('rank').value,price:$('price').value,party:$('party').value,unit:$('unit').value,discount:$('discount').value,quantity:primaryQuantity(),settledQuantity:primarySettled(),overtimeQuantity:primaryOvertime()},...extraLines.map(l=>({rank:l.rank,price:l.price,party:l.party,unit:l.unit,discount:l.discount,quantity:l.quantity,settledQuantity:l.settledQuantity,overtimeQuantity:l.overtimeQuantity}))]};}
 
-function price(){const key=[$('category').value,$('tier').value,$('rank').value].join('|'),n=state.prices[key];$('price').value=n===null||n===undefined?'':n;options($('priceOptions'),[...new Set(Object.entries(state.prices).filter(([k,v])=>k.startsWith($('category').value+'|'+$('tier').value+'|')&&v!==null).map(([,v])=>String(v)))]);let note='';if(n===null)note='这档价格是一个区间，请按本单约定手动填写单价。';if($('category').value==='男陪'&&((['大神','王牌'].includes($('tier').value)&&['神话2','神话3','赋能'].includes($('rank').value))||($('tier').value==='镇店'&&$('rank').value==='赋能')))note+=' 价目表标注此档限 4 陪 1，请确认本单适用。';$('priceNote').textContent=note;queuePreview();}
+function price(){
+ const prices=activePrices(),key=[$('category').value,$('tier').value,$('rank').value].join('|'),n=prices[key];$('price').value=n===null||n===undefined?'':n;
+ options($('priceOptions'),[...new Set(Object.entries(prices).filter(([k,v])=>k.startsWith($('category').value+'|'+$('tier').value+'|')&&v!==null).map(([,v])=>String(v)))]);
+ let note='';if($('rank').value&&(n===null||n===undefined))note=usesLegacyPricing()?'此历史档位未记录固定单价，请按原单约定填写。':'新价目表未提供该组合的价格，请向店长确认后手动填写。';
+ const limited=usesLegacyPricing()?$('category').value==='男陪'&&((['大神','王牌'].includes($('tier').value)&&['神话2','神话3','赋能'].includes($('rank').value))||($('tier').value==='镇店'&&$('rank').value==='赋能')):$('category').value==='男陪'&&(($('tier').value==='王牌'&&$('rank').value==='神话3')||($('tier').value==='镇店'&&$('rank').value==='赋能'));
+ if(limited)note+=' 价目表标注此档仅限4陪1，请确认本单适用。';$('priceNote').textContent=note;queuePreview();
+}
 function setQuantity(value){writeCount($('quantity'),$('customQuantity'),value);syncOvertime();}
-function tiers(){options($('tier'),TIERS[$('category').value],state.tier);$('unit').value=$('tier').value==='娱乐'?'小时':'把';price();refreshSettlementUI();}
-async function renderPreview(){const current=++previewVersion;const f=form();if(f.lines.some(line=>!line.rank)){$('preview').textContent='选择段位并补齐报单信息后，这里会生成预览。';$('total').textContent='—';$('unitPriceNote').textContent='';$('previewError').hidden=true;return;}try{const result=await api('report',{form:{...f,boss:f.boss.trim()||'待填写'},save:false});if(current!==previewVersion)return;$('preview').textContent=result.text;$('unitPriceNote').textContent=result.lines.map(l=>l.rank+' '+l.quantity+(l.unit==='小时'?'小时':'局')+(isTechnical()?'，结单 '+l.settledQuantity:'')+'，其中加班 '+l.overtimeQuantity+'，基础价 '+l.price+(l.partyFee?' + '+l.partyFee+'（'+l.party+'）':'')+' AUD，'+l.party+(l.discount!==1?'，'+(DISCOUNTS.find(d=>Number(d[0])===l.discount)?.[1]||''):'' )).join('；');$('total').replaceChildren(document.createTextNode(String(result.total)),Object.assign(document.createElement('span'),{textContent:'AUD'}));$('previewError').hidden=true;}catch(e){if(current!==previewVersion)return;$('previewError').textContent=e.message;$('previewError').hidden=false;$('unitPriceNote').textContent='';$('total').textContent='—';$('preview').textContent='补齐报单信息后，这里会自动生成文字。';}}
-function syncPartyDiscount(){const before=primaryBillingCache||billingLines(lastParty)[0],context=!legacyPartyAmbiguous&&screenshots.some(image=>image.matches.length)?prepareMatchBilling(before,true):null;configureDiscount($('party').value,$('discount'));const after=billingLines()[0];if(context)updateLineMatches(before,after);lastParty=$('party').value;bulkPartyManual=false;updateBulkRankButton();queuePreview();}
+function tiers(){options($('tier'),activeTiers($('category').value),state.tier);$('unit').value=$('tier').value==='娱乐'?'小时':'把';price();refreshSettlementUI();}
+async function renderPreview(){const current=++previewVersion;const f=form();const unresolved=$('unit').value==='小时'?null:screenshots.flatMap(s=>s.matches).find(m=>m.selected&&matchCharge(m).quantity===null);if(unresolved){$('previewError').textContent=matchCharge(unresolved).reason+'；请确认该局把数或是否结单。';$('previewError').hidden=false;$('total').textContent='—';$('preview').textContent='确认特殊结算后生成预览。';return;}if(f.lines.some(line=>!line.rank)){$('preview').textContent='选择段位并补齐报单信息后，这里会生成预览。';$('total').textContent='—';$('unitPriceNote').textContent='';$('previewError').hidden=true;return;}try{const result=await api('report',{form:{...f,boss:f.boss.trim()||'待填写'},save:false});if(current!==previewVersion)return;$('preview').textContent=result.text;$('unitPriceNote').textContent=result.lines.map(l=>l.rank+' '+l.quantity+(l.unit==='小时'?'小时':'局')+(isTechnical()?'，结单 '+l.settledQuantity:'')+'，其中加班 '+l.overtimeQuantity+'，基础价 '+l.price+(l.partyFee?' + '+l.partyFee+'（'+l.party+'）':'')+' AUD，'+l.party+(l.discount!==1?'，'+(DISCOUNTS.find(d=>Number(d[0])===l.discount)?.[1]||''):'' )).join('；');$('total').replaceChildren(document.createTextNode(String(result.total)),Object.assign(document.createElement('span'),{textContent:'AUD'}));$('previewError').hidden=true;}catch(e){if(current!==previewVersion)return;$('previewError').textContent=e.message;$('previewError').hidden=false;$('unitPriceNote').textContent='';$('total').textContent='—';$('preview').textContent='补齐报单信息后，这里会自动生成文字。';}}
+function syncPartyDiscount(){const before=primaryBillingCache||billingLines(lastParty)[0],context=!legacyPartyAmbiguous&&screenshots.some(image=>image.matches.length)?prepareMatchBilling(before,true):null;configureDiscount($('party').value,$('discount'));const after=billingLines()[0];if(context)updateLineMatches(before,after);lastParty=$('party').value;bulkPartyManual=false;if(context&&!usesLegacyPricing()&&before.party!==after.party){alignMatchSettlements();renderExtraLines();matchList();if(!billingManual&&isTechnical())buildFromMatches(context);}updateBulkRankButton();queuePreview();}
 function syncPrimaryBillingRate(){const before=primaryBillingCache||billingLines()[0],context=prepareMatchBilling(before,true),after=billingLines()[0];if(context)updateLineMatches(before,after);billingManual=true;queuePreview();}
 function queuePreview(event){if(!event||!['party','discount','unit','price'].includes(event.target?.id))primaryBillingCache=billingLines()[0];clearTimeout(previewTimer);previewTimer=setTimeout(renderPreview,100);}
-function syncDetectedBulkRank(){if(bulkRankManual){updateBulkRankButton();return;}const counts=new Map();for(const image of screenshots)for(const match of image.matches){const rank=match.icon?.rank||null;if(rank)counts.set(rank,(counts.get(rank)||0)+1);}const detected=[...counts].sort((a,b)=>b[1]-a[1])[0]?.[0];if(detected)$('bulkRank').value=detected;else if(!screenshots.length)$('bulkRank').value=$('rank').value||'';else $('bulkRank').value='';updateBulkRankButton();}
+function syncDetectedBulkRank(){if(bulkRankManual){updateBulkRankButton();return;}const counts=new Map();for(const image of screenshots)for(const match of image.matches){const rank=usesLegacyPricing()?match.icon?.rank:detectedRank(match);if(rank)counts.set(rank,(counts.get(rank)||0)+1);}const detected=[...counts].sort((a,b)=>b[1]-a[1])[0]?.[0];if(detected)$('bulkRank').value=detected;else if(!screenshots.length)$('bulkRank').value=$('rank').value||'';else $('bulkRank').value='';updateBulkRankButton();}
 function detailPlayerControl(image){
  const field=document.createElement('div');field.className='detail-player';
  const label=document.createElement('label');label.textContent='截图中的自己';
@@ -203,7 +236,7 @@ function detailPlayerControl(image){
  const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='请选择你在这局使用的游戏 ID';select.append(placeholder);
  for(const player of image.players||[]){const op=document.createElement('option');op.value=String(player.id);op.textContent=player.name+(player.rankName?' · '+player.rankName:' · 段位待确认');select.append(op);}
  select.value=image.matches[0].playerId===null||image.matches[0].playerId===undefined?'':String(image.matches[0].playerId);
- select.onchange=()=>{const context=prepareMatchBilling();if(!context)return;const player=select.value===''?null:image.players.find(p=>String(p.id)===select.value);const match=image.matches[0];match.playerId=player?.id??null;match.rank=player?.rank||null;match.rankName=player?.rankName||null;match.icon=player?.icon||null;match.confidence=player?.confidence||0;matchList();syncDetectedBulkRank();buildFromMatches(context);};
+ select.onchange=()=>{const context=prepareMatchBilling();if(!context)return;const player=select.value===''?null:image.players.find(p=>String(p.id)===select.value);const match=image.matches[0];match.playerId=player?.id??null;match.rank=detectedRank(player||{} )||null;match.rankName=player?.rankName||null;match.icon=player?.icon||null;match.confidence=player?.confidence||0;matchList();syncDetectedBulkRank();buildFromMatches(context);};
  const note=document.createElement('p');note.textContent='请核对默认选中的高亮玩家；可修改玩家、计费段位和特殊结算把数。';
  label.append(select);field.append(label,note);return field;
 }
@@ -221,9 +254,29 @@ function chooseScreenshot(){
  for(const image of images){const row=document.createElement('div');row.className='copy-image-choice';const thumb=document.createElement('img');thumb.src=image.url;thumb.alt=image.name;const name=document.createElement('span');name.textContent=image.name;const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent='复制这张';button.onclick=()=>copyScreenshot(image);row.append(thumb,name,button);list.append(row);}
  $('copyImages').showModal();
 }
-function matchList(){const panel=$('matchPanel'),list=$('matches');list.replaceChildren();panel.hidden=!screenshots.some(s=>s.matches.length);for(const image of screenshots){if(!image.matches.length)continue;const title=document.createElement('div');title.className='matches-heading';title.textContent=image.name;list.append(title);if(image.kind==='detail')list.append(detailPlayerControl(image));image.matches.forEach((match,i)=>{if(match.settled===undefined)match.settled=true;const row=document.createElement('div');row.className='match';const check=document.createElement('input');check.type='checkbox';check.checked=match.selected;check.setAttribute('aria-label','选择第'+(i+1)+'局');check.onchange=()=>{const context=prepareMatchBilling();if(!context){check.checked=!!match.selected;return;}match.selected=check.checked;updateBulkRankButton();buildFromMatches(context);};const label=document.createElement('span');label.textContent='第 '+(i+1)+' 局';const result=document.createElement('span');result.className='result'+(match.result==='失败'?' loss':match.result==='待确认'?' pending':'');result.textContent=match.result+' '+match.score+(match.mvp?' · '+match.mvp:'');const rank=document.createElement('select');rank.className='match-rank';options(rank,['',...RANKS],match.rank);rank.options[0].textContent='确认段位';rank.title=match.rankName?'图标识别：'+match.rankName+'；可按老板段位修改':'图标未确定，请手动确认';rank.onchange=()=>{const context=prepareMatchBilling();if(!context){rank.value=match.rank||'';return;}match.rank=rank.value;buildFromMatches(context);};row.append(check,label,result,rank);if(isTechnical()){const field=document.createElement('label');field.className='match-settled-label';field.textContent='是否结单';const settled=document.createElement('select');settled.className='match-settled';options(settled,['是','否'],match.settled?'是':'否');settled.onchange=()=>{const context=prepareMatchBilling();if(!context){settled.value=match.settled?'是':'否';return;}match.settled=settled.value==='是';buildFromMatches(context);};field.append(settled);row.append(field);}if($('unit').value!=='小时')row.append(matchBillingControls(match));list.append(row);});}updateBulkRankButton();}
-async function importImage(files){if(busy){toast('截图正在识别，请稍候。');return;}const batch=Array.from(files||[]);if(!batch.length)return;busy=true;$('copyBtn').disabled=$('saveBtn').disabled=$('copyImageBtn').disabled=true;try{for(const file of batch){if(!['image/png','image/jpeg'].includes(file.type)||file.size>16*1024*1024){toast('请使用小于 16 MB 的 PNG/JPG 截图');continue;}$('imageStatus').textContent='正在识别 '+file.name+'…';let parsed;try{parsed=await api('recognize',file,true);}catch(e){parsed={matches:[],icons:[]};toast(file.name+' 识别失败，可手动填写明细');}if(parsed.hash&&screenshots.some(s=>s.hash===parsed.hash)){toast('相同截图已经添加，已跳过');continue;}const url=URL.createObjectURL(file);screenshots.push({...parsed,url,name:file.name||'粘贴的截图',matches:(parsed.matches||[]).map(match=>({...match,party:PARTIES.includes(match.party)?match.party:$('party').value}))});if(parsed.warning)toast(parsed.warning);$('screenshot').src=url;$('screenshot').hidden=false;$('emptyImage').hidden=true;renderGallery();matchList();}if(!billingManual&&screenshots.some(s=>s.matches.length))buildFromMatches();else if(billingManual)toast('截图已添加，按需点击“按所选对局填入”更新明细');syncDetectedBulkRank();$('imageStatus').textContent=screenshots.length+' 张截图 · '+screenshots.reduce((n,s)=>n+s.matches.length,0)+' 局待核对';queuePreview();}finally{busy=false;$('file').value='';$('copyBtn').disabled=$('saveBtn').disabled=false;$('copyImageBtn').disabled=copyingImage||!screenshots.some(s=>s.image&&!s.missing);}}
-function reset(){bulkPartyManual=false;legacyPartyAmbiguous=false;$('bulkParty').value='';editingMode();for(const image of screenshots)URL.revokeObjectURL(image.url);screenshots=[];bulkRankManual=false;extraLines=[];billingManual=false;primaryOvertimeManual=false;primarySettledManual=false;$('file').value='';$('screenshot').hidden=true;$('screenshot').removeAttribute('src');$('emptyImage').hidden=false;$('matchPanel').hidden=true;$('matchBillingError').hidden=true;$('imageStatus').textContent='也可以直接手动填写';$('playerId').value=state.id;$('boss').value='';$('game').value='val';$('rank').value='';$('category').value=state.category;tiers();setQuantity(1);$('party').value='正常';lastParty='正常';$('discount').value='1';syncPartyDiscount();setNow();renderGallery();syncDetectedBulkRank();refreshSettlementUI();syncBossDiscount(true);queuePreview();rememberDraft();}
+function matchList(){
+ const panel=$('matchPanel'),list=$('matches');list.replaceChildren();panel.hidden=!screenshots.some(s=>s.matches.length);
+ for(const image of screenshots){if(!image.matches.length)continue;const title=document.createElement('div');title.className='matches-heading';title.textContent=image.name;list.append(title);if(image.kind==='detail')list.append(detailPlayerControl(image));if(!usesLegacyPricing()&&!isTechnical()&&image.matches.some(match=>match.ending==='remake')){const note=document.createElement('p');note.className='field-note';note.textContent='娱乐红屏按实际服务时长填写：陪玩本人红屏需扣除当局时长，其他人红屏正常计时。';list.append(note);}
+  image.matches.forEach((match,i)=>{
+   applySettlementDefaults(match);if(match.settled===undefined)match.settled=true;
+   const row=document.createElement('div');row.className='match';const check=document.createElement('input');check.type='checkbox';check.checked=match.selected;check.setAttribute('aria-label','选择第'+(i+1)+'局');check.onchange=()=>{const context=prepareMatchBilling();if(!context){check.checked=!!match.selected;return;}match.selected=check.checked;updateBulkRankButton();buildFromMatches(context);};
+   const label=document.createElement('span');label.textContent='第 '+(i+1)+' 局';const result=document.createElement('span');result.className='result'+(match.result==='失败'?' loss':match.result==='待确认'?' pending':'');result.textContent=match.result+' '+match.score+(match.mvp?' · '+match.mvp:'');
+   const rank=document.createElement('select');rank.className='match-rank';options(rank,['',...activeRanks()],match.rank);rank.options[0].textContent='确认段位';rank.title=match.rankName?'图标识别：'+match.rankName+'；可按老板段位修改':'图标未确定，请手动确认';rank.onchange=()=>{const context=prepareMatchBilling();if(!context){rank.value=match.rank||'';return;}match.rank=rank.value;buildFromMatches(context);};row.append(check,label,result,rank);
+   if(isTechnical()){const field=document.createElement('label');field.className='match-settled-label';field.textContent='是否结单';const settled=document.createElement('select');settled.className='match-settled';options(settled,['是','否'],match.settled?'是':'否');settled.onchange=()=>{const context=prepareMatchBilling();if(!context){settled.value=match.settled?'是':'否';return;}match.settled=settled.value==='是';match.settledManual=true;buildFromMatches(context);};field.append(settled);row.append(field);}
+   if($('unit').value!=='小时')row.append(matchBillingControls(match));
+   if(!usesLegacyPricing()&&match.ending==='remake'&&isTechnical())row.append(redScreenControl(match));list.append(row);
+  });
+ }updateBulkRankButton();
+}
+function redScreenControl(match){
+ const select=document.createElement('select');select.className='match-red-screen';select.setAttribute('aria-label','确认红屏情况');
+ const choices=[['','确认红屏情况'],['self','陪玩本人红屏'],['early','其他人红屏 · 5回合及以下'],['regular','其他人红屏 · 6回合及以上'],['match-point','其他人红屏 · 赛点或加时']];
+ select.replaceChildren(...choices.map(([value,text])=>Object.assign(document.createElement('option'),{value,textContent:text})));
+ select.value=match.redScreenParty==='self'?'self':match.redScreenParty==='other'?match.redScreenStage||'':'';
+ select.onchange=()=>{const context=prepareMatchBilling();if(!context)return;const value=select.value;match.redScreenParty=value==='self'?'self':value?'other':undefined;match.redScreenStage=value==='self'?'normal':value||undefined;match.billingQuantity=null;match.settledManual=false;applySettlementDefaults(match);matchList();buildFromMatches(context);};return select;
+}
+async function importImage(files){if(busy){toast('截图正在识别，请稍候。');return;}const batch=Array.from(files||[]);if(!batch.length)return;busy=true;$('copyBtn').disabled=$('saveBtn').disabled=$('copyImageBtn').disabled=true;try{for(const file of batch){if(!['image/png','image/jpeg'].includes(file.type)||file.size>16*1024*1024){toast('请使用小于 16 MB 的 PNG/JPG 截图');continue;}$('imageStatus').textContent='正在识别 '+file.name+'…';let parsed;try{parsed=await api('recognize',file,true);}catch(e){parsed={matches:[],icons:[]};toast(file.name+' 识别失败，可手动填写明细');}if(parsed.hash&&screenshots.some(s=>s.hash===parsed.hash)){toast('相同截图已经添加，已跳过');continue;}const url=URL.createObjectURL(file);screenshots.push({...parsed,url,name:file.name||'粘贴的截图',matches:(parsed.matches||[]).map(match=>({...match,rank:detectedRank(match)||null,party:PARTIES.includes(match.party)?match.party:$('party').value,settledManual:false}))});if(parsed.warning)toast(parsed.warning);$('screenshot').src=url;$('screenshot').hidden=false;$('emptyImage').hidden=true;renderGallery();matchList();}if(!billingManual&&screenshots.some(s=>s.matches.length))buildFromMatches();else if(billingManual)toast('截图已添加，按需点击“按所选对局填入”更新明细');syncDetectedBulkRank();$('imageStatus').textContent=screenshots.length+' 张截图 · '+screenshots.reduce((n,s)=>n+s.matches.length,0)+' 局待核对';queuePreview();}finally{busy=false;$('file').value='';$('copyBtn').disabled=$('saveBtn').disabled=false;$('copyImageBtn').disabled=copyingImage||!screenshots.some(s=>s.image&&!s.missing);}}
+function reset(){currentPricingRevision=PricingRules.revision;syncPricingControls();bulkPartyManual=false;legacyPartyAmbiguous=false;$('bulkParty').value='';editingMode();for(const image of screenshots)URL.revokeObjectURL(image.url);screenshots=[];bulkRankManual=false;extraLines=[];billingManual=false;primaryOvertimeManual=false;primarySettledManual=false;$('file').value='';$('screenshot').hidden=true;$('screenshot').removeAttribute('src');$('emptyImage').hidden=false;$('matchPanel').hidden=true;$('matchBillingError').hidden=true;$('imageStatus').textContent='也可以直接手动填写';$('playerId').value=state.id;$('boss').value='';$('game').value='val';$('rank').value='';$('category').value=state.category;tiers();setQuantity(1);$('party').value='正常';lastParty='正常';$('discount').value='1';syncPartyDiscount();setNow();renderGallery();syncDetectedBulkRank();refreshSettlementUI();syncBossDiscount(true);queuePreview();rememberDraft();}
 async function copyText(text){if(navigator.clipboard?.writeText){try{await navigator.clipboard.writeText(text);return;}catch{}}const el=document.createElement('textarea');el.value=text;document.body.append(el);el.select();const ok=document.execCommand('copy');el.remove();if(!ok)throw new Error('复制失败，请在预览中选中文字复制。');}
 async function commit(copy){
  if(busy)return;
@@ -248,7 +301,7 @@ function draftSnapshot(){
  const value=structuredClone(form()),number=n=>n===''||n===null||n===undefined?n:Number.isFinite(Number(n))?Number(n):n;
  for(const key of ['price','quantity','discount','extra'])value[key]=number(value[key]);
  for(const line of value.lines)for(const key of ['price','quantity','settledQuantity','overtimeQuantity','discount'])line[key]=number(line[key]);
- const images=screenshotSnapshot().map(image=>({image:image.image??null,name:image.name||'',kind:image.kind||'history',hash:image.hash||'',players:image.players||[],matches:image.matches.map(match=>({id:match.id??null,score:match.score||'',result:match.result||'',mvp:match.mvp||'',rank:match.rank||null,rankName:match.rankName||null,party:match.party||null,billing:match.billing?{rank:match.billing.rank||'',party:match.billing.party||'正常',price:number(match.billing.price),discount:number(match.billing.discount),unit:match.billing.unit}:null,selected:!!match.selected,settled:match.settled!==false,billingQuantity:number(match.billingQuantity??null),ending:match.ending||'normal',actualRounds:match.actualRounds??null,playerId:match.playerId??null,iconRank:match.icon?.rank||null}))}));
+ const images=screenshotSnapshot().map(image=>({image:image.image??null,name:image.name||'',kind:image.kind||'history',hash:image.hash||'',players:image.players||[],matches:image.matches.map(match=>({id:match.id??null,score:match.score||'',result:match.result||'',mvp:match.mvp||'',rank:match.rank||null,rankName:match.rankName||null,party:match.party||null,billing:match.billing?{rank:match.billing.rank||'',party:match.billing.party||'正常',price:number(match.billing.price),discount:number(match.billing.discount),unit:match.billing.unit}:null,selected:!!match.selected,settled:match.settled!==false,settledManual:match.settledManual,redScreenParty:match.redScreenParty,redScreenStage:match.redScreenStage,billingQuantity:number(match.billingQuantity??null),ending:match.ending||'normal',actualRounds:match.actualRounds??null,playerId:match.playerId??null,iconRank:match.icon?.rank||null}))}));
  return structuredClone({form:value,screenshots:images});
 }
 function rememberDraft(snapshot=draftSnapshot()){draftBaseline=snapshot;primaryBillingCache=billingLines()[0];}
@@ -276,13 +329,13 @@ async function restoreHistory(entry){
  busy=true;$('copyBtn').disabled=$('saveBtn').disabled=true;
  const restored=[];
  try{
-  bulkPartyManual=false;$('bulkParty').value='';const f=structuredClone(entry.form),files=entry.images?.length?entry.images:entry.image?[entry.image]:[];
+  bulkPartyManual=false;$('bulkParty').value='';const f=structuredClone(entry.form);currentPricingRevision=f.pricingRevision||PricingRules.legacyRevision;syncPricingControls();const files=entry.images?.length?entry.images:entry.image?[entry.image]:[];
   const saved=Array.isArray(entry.screenshots)&&entry.screenshots.length?entry.screenshots:files.map((image,i)=>({image,name:'历史截图 '+(i+1),matches:[]}));
   if(!saved.length&&f.matchBilling?.length)saved.push({name:'历史对局',matches:[]});
   // Older versions kept only selected matches, without their image mapping.
   if(!entry.screenshots?.length&&saved.length)saved[0].matches=(f.matchBilling||[]).map((m,i)=>({...m,id:i,selected:true,billingQuantity:m.quantity}));
   for(const s of saved){
-   const item={...structuredClone(s),url:'',matches:structuredClone(s.matches||[]),missing:false};
+   const item={...structuredClone(s),url:'',matches:structuredClone(s.matches||[]).map(match=>({...match,settledManual:match.settledManual??true})),missing:false};
    if(item.image){try{const response=await fetch('/api/image/'+encodeURIComponent(item.image),{headers:{'x-app-token':token}});if(!response.ok)throw new Error();item.url=URL.createObjectURL(await response.blob());}catch{item.missing=true;}}
    restored.push(item);
   }
@@ -292,7 +345,7 @@ async function restoreHistory(entry){
   $('file').value='';$('matchBillingError').hidden=true;
   $('date').value=f.date;$('time').value=f.time||'12:00';$('boss').value=f.boss||'';$('game').value=f.game||'val';
   $('playerId').value=f.playerId||entry.text?.match(/^陪(?:陪|玩)：\s*(.+)$/m)?.[1]?.trim()||state.id;
-  $('category').value=f.category||state.category;options($('tier'),TIERS[$('category').value],f.tier||state.tier);
+  $('category').value=f.category||state.category;options($('tier'),activeTiers($('category').value),f.tier||state.tier);
   const legacyParty=f.party||([.9,.882,.873,.864,.855].includes(Number(f.discount))?'4陪1':'正常');
   const lines=f.lines?.length?f.lines:[{rank:f.rank,price:f.price,quantity:f.quantity,settledQuantity:f.quantity,overtimeQuantity:Number(f.extra||0)*Number(f.quantity),party:legacyParty,discount:f.discount,unit:f.unit}];
   const first=lines[0];$('rank').value=first.rank||f.rank||'';price();$('price').value=first.price;
@@ -376,14 +429,24 @@ async function openHistory(){
  try{state=await api('state');updateHistoryBossOptions();renderHistoryList();$('history').showModal();}catch(e){toast(e.message);}
 }
 
-async function init(){state=await api('state');quantityChoices($('quantity'));quantityChoices($('overtimeQuantity'),true);quantityChoices($('settledQuantity'),true);options($('bulkParty'),['',...PARTIES]);$('bulkParty').options[0].textContent='分别设置';$('bulkParty').onchange=applyBulkParty;options($('bulkRank'),['',...RANKS]);$('bulkRank').options[0].textContent='未识别，请选择';writeCount($('settledQuantity'),$('customSettledQuantity'),1);writeCount($('quantity'),$('customQuantity'),1);writeCount($('overtimeQuantity'),$('customOvertimeQuantity'),0);options($('rank'),['',...RANKS]);$('rank').options[0].textContent='请选择段位';setNow();$('playerId').value=state.id;$('category').value=state.category;tiers();bosses();$('quantity').value='1';refreshSettlementUI();syncPartyDiscount();syncBossDiscount(true);queuePreview();
+function repriceProfile(categoryChanged=false){
+ const before=billingLines().map(line=>({...line}));
+ if(categoryChanged)tiers();else{$('unit').value=$('tier').value==='娱乐'?'小时':'把';price();}
+ for(const line of extraLines)line.price=tariff(line.rank);
+ configureDiscount($('party').value,$('discount'));for(const line of extraLines)line.discount=partyDiscount(line.party,line.discount);
+ const after=billingLines();before.forEach((line,index)=>updateLineMatches(line,after[index]));
+ for(const image of screenshots)for(const match of image.matches)if(match.selected)applySettlementDefaults(match);
+ alignMatchSettlements();refreshSettlementUI();queuePreview();
+}
+
+async function init(){state=await api('state');options($('discount'),DISCOUNTS.map(d=>d[0]));DISCOUNTS.forEach((d,i)=>$('discount').options[i].textContent=d[1]);options($('party'),PARTIES);syncPricingControls();quantityChoices($('quantity'));quantityChoices($('overtimeQuantity'),true);quantityChoices($('settledQuantity'),true);options($('bulkParty'),['',...PARTIES]);$('bulkParty').options[0].textContent='分别设置';$('bulkParty').onchange=applyBulkParty;options($('bulkRank'),['',...RANKS]);$('bulkRank').options[0].textContent='未识别，请选择';writeCount($('settledQuantity'),$('customSettledQuantity'),1);writeCount($('quantity'),$('customQuantity'),1);writeCount($('overtimeQuantity'),$('customOvertimeQuantity'),0);options($('rank'),['',...RANKS]);$('rank').options[0].textContent='请选择段位';setNow();$('playerId').value=state.id;$('category').value=state.category;tiers();bosses();$('quantity').value='1';refreshSettlementUI();syncPartyDiscount();syncBossDiscount(true);queuePreview();
  $('drop').onclick=()=>$('file').click();$('drop').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('file').click();}};$('replaceBtn').onclick=()=>$('file').click();$('file').onchange=()=>{importImage($('file').files);};
  for(const event of ['dragenter','dragover'])$('drop').addEventListener(event,e=>{e.preventDefault();$('drop').classList.add('drag');});$('drop').ondragleave=()=>$('drop').classList.remove('drag');$('drop').ondrop=e=>{e.preventDefault();$('drop').classList.remove('drag');importImage(e.dataTransfer.files);};window.addEventListener('dragover',e=>e.preventDefault());window.addEventListener('drop',e=>e.preventDefault());window.addEventListener('paste',e=>{const items=[...(e.clipboardData?.items||[])].filter(i=>i.type.startsWith('image/'));if(items.length){e.preventDefault();importImage(items.map(i=>i.getAsFile()));}});
- $('orderForm').onsubmit=e=>e.preventDefault();$('orderForm').addEventListener('input',queuePreview);$('category').onchange=()=>{tiers();for(const l of extraLines)l.price=tariff(l.rank);refreshSettlementUI();};$('tier').onchange=()=>{$('unit').value=$('tier').value==='娱乐'?'小时':'把';price();for(const l of extraLines)l.price=tariff(l.rank);refreshSettlementUI();};$('rank').onchange=()=>{billingManual=true;price();};$('price').addEventListener('input',syncPrimaryBillingRate);$('unit').onchange=()=>{syncPrimaryBillingRate();matchList();};$('discount').onchange=syncPartyDiscount;$('party').onchange=syncPartyDiscount;for(const id of ['date','time'])$(id).addEventListener('input',()=>{timeManual=true;extraManual=false;updateOvertime();});$('nowBtn').onclick=setNow;$('extra').onchange=()=>{extraManual=true;primaryOvertimeManual=false;for(const l of extraLines)l.manualOvertime=false;syncOvertime();};bindCount($('quantity'),$('customQuantity'),()=>{billingManual=true;syncOvertime();});bindCount($('overtimeQuantity'),$('customOvertimeQuantity'),()=>{primaryOvertimeManual=true;billingManual=true;queuePreview();});$('addLine').onclick=()=>{billingManual=true;addBillingLine();renderExtraLines();queuePreview();};$('fillFromMatches').onclick=buildFromMatches;bindCount($('settledQuantity'),$('customSettledQuantity'),()=>{primarySettledManual=true;billingManual=true;syncOvertime();});$('bulkRank').onchange=()=>{bulkRankManual=true;updateBulkRankButton();};$('applyBulkRank').onclick=()=>{if(!$('bulkRank').value){toast('请选择整单段位');return;}const context=prepareMatchBilling();if(!context)return;bulkRankManual=true;let count=0;for(const image of screenshots)for(const match of image.matches)if(match.selected){match.rank=$('bulkRank').value;count++;}if(count){matchList();buildFromMatches(context);toast('已将 '+count+' 局统一为 '+$('bulkRank').value);}else toast('请先选择要应用的对局');};
+ $('orderForm').onsubmit=e=>e.preventDefault();$('orderForm').addEventListener('input',queuePreview);$('category').onchange=()=>repriceProfile(true);$('tier').onchange=()=>repriceProfile();$('rank').onchange=()=>{billingManual=true;price();};$('price').addEventListener('input',syncPrimaryBillingRate);$('unit').onchange=()=>{syncPrimaryBillingRate();matchList();};$('discount').onchange=syncPartyDiscount;$('party').onchange=syncPartyDiscount;for(const id of ['date','time'])$(id).addEventListener('input',()=>{timeManual=true;extraManual=false;updateOvertime();});$('nowBtn').onclick=setNow;$('extra').onchange=()=>{extraManual=true;primaryOvertimeManual=false;for(const l of extraLines)l.manualOvertime=false;syncOvertime();};bindCount($('quantity'),$('customQuantity'),()=>{billingManual=true;syncOvertime();});bindCount($('overtimeQuantity'),$('customOvertimeQuantity'),()=>{primaryOvertimeManual=true;billingManual=true;queuePreview();});$('addLine').onclick=()=>{billingManual=true;addBillingLine();renderExtraLines();queuePreview();};$('fillFromMatches').onclick=buildFromMatches;bindCount($('settledQuantity'),$('customSettledQuantity'),()=>{primarySettledManual=true;billingManual=true;syncOvertime();});$('bulkRank').onchange=()=>{bulkRankManual=true;updateBulkRankButton();};$('applyBulkRank').onclick=()=>{if(!$('bulkRank').value){toast('请选择整单段位');return;}const context=prepareMatchBilling();if(!context)return;bulkRankManual=true;let count=0;for(const image of screenshots)for(const match of image.matches)if(match.selected){match.rank=$('bulkRank').value;count++;}if(count){matchList();buildFromMatches(context);toast('已将 '+count+' 局统一为 '+$('bulkRank').value);}else toast('请先选择要应用的对局');};
  $('boss').addEventListener('input',()=>syncBossDiscount());$('boss').addEventListener('change',()=>syncBossDiscount());$('bossDiscount').onchange=updateBossDiscountNote;$('saveBossDiscount').onclick=saveBossDiscount;
  $('saveBoss').onclick=async()=>{try{state.bosses=await api('boss',{name:$('boss').value});bosses();toast('老板已加入列表');}catch(e){toast(e.message);}};
  $('copyImageBtn').onclick=chooseScreenshot;$('copyBtn').onclick=()=>commit(true);$('saveBtn').onclick=()=>commit(false);$('newBtn').onclick=$('exitHistory').onclick=()=>{if(!busy&&confirmDiscardDraft())reset();};$('settingsBtn').onclick=$('editId').onclick=openSettings;$('historyBtn').onclick=openHistory;
- options($('historyRank'),['',...RANKS]);$('historyRank').options[0].textContent='全部段位';
+ options($('historyRank'),['',...RANKS,...PricingRules.legacyRanks.filter(rank=>!RANKS.includes(rank))]);$('historyRank').options[0].textContent='全部段位';
  for(const id of ['historyDate','historyFrom','historyTo','historyBoss','historyRank'])$(id).addEventListener('input',renderHistoryList);
  $('historyDateMode').onchange=()=>syncHistoryDateMode();syncHistoryDateMode(false);
  $('clearHistoryFilters').onclick=clearHistoryFilters;

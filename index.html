@@ -1,18 +1,19 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VAL 报单助手</title><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><script src="/billing-rules.js" defer></script><script src="/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VAL 报单助手</title><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><script src="/pricing-rules.js" defer></script><script src="/billing-rules.js" defer></script><script src="/app.js" defer></script></head>
 <body>
-<header class="app-header"><div class="brand"><img class="store-logo" src="/mvp-gaming-logo.png" alt="mvp gaming 店标"><div><strong>mvp gaming</strong><small>VAL 报单助手 · 1.2.5 测试版</small></div></div><div class="producer-credit">produced by Wizri</div><nav><button id="historyBtn" class="quiet">报单记录</button><button id="settingsBtn" class="quiet">设置</button></nav></header>
+<header class="app-header"><div class="brand"><img class="store-logo" src="/mvp-gaming-logo.png" alt="mvp gaming 店标"><div><strong>mvp gaming</strong><small>VAL 报单助手 · 1.3.0 测试版</small></div></div><div class="producer-credit">produced by Wizri</div><nav><button id="historyBtn" class="quiet">报单记录</button><button id="settingsBtn" class="quiet">设置</button></nav></header>
 <main>
 <section class="workspace">
  <div class="section-title"><h1 id="orderTitle">新报单</h1><span class="local">● 保存在本机 · AUD</span></div>
+ <p id="pricingNotice" class="pricing-notice" role="status" hidden></p>
  <div id="historyEdit" class="history-edit" role="status" hidden><div><strong>正在编辑历史报单</strong><span>保存会更新这一条记录，不会新增报单。</span></div><button id="exitHistory" class="quiet" type="button">开始新报单</button></div>
  <section class="card screenshot-card">
   <div id="drop" class="drop" tabindex="0" role="button" aria-label="导入战绩截图"><div id="emptyImage"><div class="upload-icon">↥</div><h2>把战绩截图放到这里</h2><p>拖入图片 · 点击选择 · Ctrl + V 粘贴</p><small>支持 PNG / JPG</small></div><img id="screenshot" alt="已导入的战绩截图" hidden></div>
   <input id="file" type="file" accept="image/png,image/jpeg" multiple hidden>
   <div id="imageGallery" class="image-gallery" hidden></div>
   <div class="image-footer"><span id="imageStatus">也可以直接手动填写</span><button id="replaceBtn" class="quiet small">选择截图</button></div>
-  <div id="matchPanel" hidden><div class="matches-heading"><strong>本单对局</strong><button id="fillFromMatches" type="button" class="quiet small">按所选对局填入</button></div><div class="bulk-rank"><label>老板段位<select id="bulkRank"></select></label><label>陪玩人数<select id="bulkParty" aria-label="统一陪玩人数"><option value="">分别设置</option></select></label><button id="applyBulkRank" type="button" class="primary">一键应用到已选对局</button></div><p class="field-note">人数可留空并在下方各分段分别设置；上方选择具体人数即生效，统一按钮只改段位。加时自动换算把数，特殊结算可直接修改。</p><p id="matchBillingError" class="error" hidden></p><div id="matches"></div></div>
+  <div id="matchPanel" hidden><div class="matches-heading"><strong>本单对局</strong><button id="fillFromMatches" type="button" class="quiet small">按所选对局填入</button></div><div class="bulk-rank"><label>老板段位<select id="bulkRank"></select></label><label>陪玩人数<select id="bulkParty" aria-label="统一陪玩人数"><option value="">分别设置</option></select></label><button id="applyBulkRank" type="button" class="primary">一键应用到已选对局</button></div><p class="field-note">人数可留空并在下方各分段分别设置；上方选择具体人数即生效，统一按钮只改段位。加时自动换算把数，特殊结算可直接修改；是否结单请按店规核对KDA排名。</p><p id="matchBillingError" class="error" hidden></p><div id="matches"></div></div>
  </section>
  <section class="card form-card">
   <div class="card-title"><h2>报单信息</h2><span>每个分段独立计价</span></div>
@@ -38,7 +39,7 @@
    </div>
    <p id="priceNote" class="field-note"></p>
    <div class="line-heading"><strong>其他计费分段</strong><button id="addLine" class="primary" type="button">＋ 添加计费分段</button></div>
-   <p class="field-note">上方填写第 1 段；同段位也可添加分段。每段的陪玩人数、折扣和结算方式独立设置，四陪一只对所在分段打九折。</p><div id="extraLines"></div>
+   <p class="field-note">上方填写第 1 段；同段位也可添加分段。每段的陪玩人数、折扣和结算方式独立设置，技术陪四陪一所在分段打九折，五陪零打88折；仍可叠加老板折扣。</p><div id="extraLines"></div>
    <p class="field-note">悉尼时间 03:00–09:59 默认加班；跨时段请填写实际加班局数，每个加班局的单价 +1 AUD。</p>
    <p id="unitPriceNote" class="field-note"></p>
   </form>
@@ -49,7 +50,7 @@
  <div class="note"><span>✦</span><p>段位识别结果请核对一次。没有识别到的字段可以直接手动选择。</p></div>
 </aside>
 </main>
-<dialog id="settings"><div class="dialog-title"><h2>设置</h2><button data-close="settings" class="quiet">关闭</button></div><p class="muted">陪玩 ID 和默认档位会自动带入每次报单。</p><div class="grid"><label class="wide">陪玩 ID<input id="settingId" maxlength="80"></label><label>默认类型<select id="settingCategory"><option>男陪</option><option>女陪</option></select></label><label>默认档位<select id="settingTier"></select></label></div><h3>价格表 · AUD</h3><p class="muted">下面是所选默认档位的价格，可以按店内更新修改。</p><div id="priceEditor" class="price-editor"></div><h3>已保存的老板</h3><div id="bossManager"></div><p class="muted">设置、老板和报单记录保存在当前 Windows 用户的本地数据文件夹，卸载软件会保留记录。</p><button id="saveSettings" class="primary">保存设置</button></dialog>
+<dialog id="settings"><div class="dialog-title"><h2>设置</h2><button data-close="settings" class="quiet">关闭</button></div><p class="muted">陪玩 ID 和默认档位会自动带入每次报单。</p><div class="grid"><label class="wide">陪玩 ID<input id="settingId" maxlength="80"></label><label>默认类型<select id="settingCategory"><option>男陪</option><option>女陪</option></select></label><label>默认档位<select id="settingTier"></select></label></div><h3>价格表 · AUD</h3><p class="muted">已采用新版店内价目表；这里可保留或修改本人的约定单价，历史报单原价不变。</p><div id="priceEditor" class="price-editor"></div><h3>已保存的老板</h3><div id="bossManager"></div><p class="muted">设置、老板和报单记录保存在当前 Windows 用户的本地数据文件夹，卸载软件会保留记录。</p><button id="saveSettings" class="primary">保存设置</button></dialog>
 <dialog id="history"><div class="dialog-title"><h2>报单记录</h2><button data-close="history" class="quiet">关闭</button></div><p class="muted">三个条件可同时筛选。老板完整名精确匹配，部分名字可搜索；点击记录可查看和修改。</p><div class="history-filters" aria-label="筛选报单记录">
  <div class="history-date-field"><div class="history-date-heading"><span>报单日期</span><select id="historyDateMode" aria-label="日期筛选方式"><option value="day">按单日</option><option value="range">按时间段</option></select></div>
   <div id="historySingleDate"><input id="historyDate" type="date" aria-label="报单日期"></div>

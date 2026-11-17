@@ -33,3 +33,5 @@ input,select{font-size:15px}.brand small,.drop small{font-size:13px}.field-note{
 .store-logo{width:54px;height:64px;object-fit:contain;background:#061c2a;border-radius:10px;flex-shrink:0}.brand>div>strong{font-size:20px;letter-spacing:.6px;color:#123b42}.brand small{font-size:12px}@media(max-width:520px){.store-logo{width:48px;height:58px}}
 
 .bulk-rank{grid-template-columns:140px 140px minmax(0,1fr)}.bulk-rank #bulkParty{height:44px}.bulk-rank #applyBulkRank{width:min(100%,350px);height:112px}@media(max-width:650px){.bulk-rank{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.bulk-rank>label{width:auto;min-width:0}.bulk-rank #applyBulkRank{grid-column:1/-1;justify-self:end}}@media(max-width:520px){.bulk-rank #applyBulkRank{height:96px}}
+
+.pricing-notice{margin:0 0 14px;padding:10px 13px;border:1px solid #cee4df;border-radius:9px;background:#edf7f4;color:#4f716a;font-size:13px;line-height:1.6}.match-red-screen{width:auto;max-width:100%;height:34px;font-size:12px;margin-left:auto}.match:has(.match-red-screen){flex-wrap:wrap}
